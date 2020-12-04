@@ -25,6 +25,8 @@ from tvm.relay.ty import is_dynamic
 from .generic import *
 from .. import op as _op
 
+import tvm
+
 logger = logging.getLogger("strategy")
 
 _NCHWc_matcher = re.compile("^NCHW[0-9]+c$")
@@ -117,8 +119,9 @@ def conv2d_strategy_cpu(attrs, inputs, out_type, target):
             return conv2d_NCHWc_strategy_cpu(attrs, inputs, out_type, target)
         elif layout == "NHWC":
             assert kernel_layout == "HWIO"
+            logger.warning("For x86 target, NCHW layout is recommended for conv2d.")
             strategy.add_implementation(
-                wrap_compute_conv2d(topi.nn.conv2d_nhwc, need_auto_scheduler_layout=True),
+                wrap_compute_conv2d(topi.nn.conv2d_nhwc),
                 wrap_topi_schedule(topi.x86.schedule_conv2d_nhwc),
                 name="conv2d_nhwc.x86",
             )
@@ -301,21 +304,40 @@ def conv1d_strategy_cpu(attrs, inputs, out_type, target):
         raise ValueError("Unsupported conv1d layout {}".format(layout))
     return strategy
 
-
 @dense_strategy.register("cpu")
 def dense_strategy_cpu(attrs, inputs, out_type, target):
     """dense x86 strategy"""
+    # import pdb;pdb.set_trace()
+
     strategy = _op.OpStrategy()
-    m, _ = inputs[0].shape
+    m, k = inputs[0].shape
+    n, k = inputs[1].shape
+    print("dense strategy")
+    print("m, k", m, k)
+    print("n, k", n, k)
     same_type = inputs[0].dtype == inputs[1].dtype == out_type.dtype
     dtype = inputs[0].dtype
     u8s8s32 = dtype == "uint8" and inputs[1].dtype == "int8" and out_type.dtype == "int32"
+
     strategy.add_implementation(
         wrap_compute_dense(topi.x86.dense_nopack),
         wrap_topi_schedule(topi.x86.schedule_dense_nopack),
         name="dense_nopack.x86",
         plevel=10,
     )
+
+    if False:
+        print("SKIP ISS use extern dense")
+    else:
+        with SpecializedCondition(dtype == "int16" and inputs[1].dtype == "int16" and out_type.dtype == "int32" and k <= 3072 and n <= 1024):
+            print("ISS use extern dense")
+            strategy.add_implementation(
+                wrap_compute_dense(topi.xilinx_fpga.dense_nopack),
+                wrap_topi_schedule(topi.generic.schedule_extern),
+                name="dense_nopack.xiiln_fpga",
+                plevel=11,
+            )
+
     if "cblas" in target.libs:
         with SpecializedCondition(same_type and dtype in ["float32", "float64"]):
             strategy.add_implementation(
@@ -443,18 +465,5 @@ def bitserial_dense_strategy_cpu(attrs, inputs, out_type, target):
         wrap_compute_bitserial_dense(topi.x86.bitserial_dense),
         wrap_topi_schedule(topi.x86.schedule_bitserial_dense),
         name="bitserial_dense.x86",
-    )
-    return strategy
-
-
-@scatter_nd_strategy.register("cpu")
-def scatter_nd_strategy_cpu(attrs, inputs, out_type, target):
-    """scatter_nd x86 strategy"""
-    strategy = _op.OpStrategy()
-    strategy.add_implementation(
-        wrap_compute_scatter_nd(topi.x86.scatter_nd),
-        wrap_topi_schedule(topi.generic.schedule_extern),
-        name="scatter_nd.x86",
-        plevel=10,
     )
     return strategy
