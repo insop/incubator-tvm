@@ -43,6 +43,7 @@ def xilinx_matmul_pynq(a, b, c):
 
     skip_everything = False
     debug = False
+    do_padding = False
     pynq = True
     if pynq:
         import os
@@ -51,7 +52,7 @@ def xilinx_matmul_pynq(a, b, c):
 
     # import pdb;pdb.set_trace()
     Nbanks=8
-    Nmat=3
+    Nmat=1
     Tsize=1024
     Nvec=14
 
@@ -103,15 +104,19 @@ def xilinx_matmul_pynq(a, b, c):
         print("xilinx matmul: c shape differs", (cm, cn), (m, n))
         # import pdb;pdb.set_trace()
 
-    k_pad = (Tsize - k) if (Tsize - k) > 0 else 0
-    m_pad = (Nvec - m) if (Nvec - m) > 0 else 0
-    v = np.pad(a.asnumpy(), [(0,m_pad), (0, k_pad)], mode='constant')
+    if do_padding:
+        k_pad = (Tsize - k) if (Tsize - k) > 0 else 0
+        m_pad = (Nvec - m) if (Nvec - m) > 0 else 0
+        v = np.pad(a.asnumpy(), [(0,m_pad), (0, k_pad)], mode='constant')
 
-    # b: w, pad
-    n_pad = (Nmat*Tsize)-n if (Nmat*Tsize)-n > 0 else 0
-    w = np.pad(b.asnumpy(), [(0,n_pad),(0, k_pad)], mode='constant')
+        # b: w, pad
+        n_pad = (Nmat*Tsize)-n if (Nmat*Tsize)-n > 0 else 0
+        w = np.pad(b.asnumpy(), [(0,n_pad),(0, k_pad)], mode='constant')
+    else:
+        v = a.asnumpy()
+        w = b.asnumpy()
 
-    if debug:
+    if debug and do_padding:
         print("n_pad", n_pad)
         print("m_pad, k_pad", m_pad, k_pad)
 
@@ -160,7 +165,7 @@ def xilinx_matmul_pynq(a, b, c):
         source_w_split_np = []
         for i in range(Nbanks):
             source_w_split_np.append(np.zeros((Nmat*Tsize,Tsize//Nbanks)))
-        # a : w
+        # b : w
         source_w_split_np = np.hsplit(w, Nbanks)
 
         if debug:
@@ -223,7 +228,10 @@ def xilinx_matmul_pynq(a, b, c):
             print("------ pynq outputbuf -------")
 
         outbuf1 = outbuf.T
-        outbuf2 = outbuf1[:cm,:cn]
+        if do_padding:
+            outbuf2 = outbuf1[:cm,:cn]
+        else:
+            outbuf2 = outbuf1
         tvm.nd.array(outbuf2.astype(c.dtype)).copyto(c)
 
         if debug:

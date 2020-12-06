@@ -310,6 +310,7 @@ def dense_strategy_cpu(attrs, inputs, out_type, target):
     # import pdb;pdb.set_trace()
 
     debug = True
+    use_pynq = False
 
     strategy = _op.OpStrategy()
     m, k = inputs[0].shape
@@ -325,8 +326,8 @@ def dense_strategy_cpu(attrs, inputs, out_type, target):
         plevel=10,
     )
 
-    with SpecializedCondition(dtype == "int16" and inputs[1].dtype == "int16" and out_type.dtype == "int32" and k <= 3072 and n <= 1024):
-    # if dtype == "int16" and inputs[1].dtype == "int16" and out_type.dtype == "int32" and k <= 3072 and n <= 1024:
+    # with SpecializedCondition(dtype == "int16" and inputs[1].dtype == "int16" and out_type.dtype == "int32" and k <= 3072 and n <= 1024):
+    if use_pynq and dtype == "int16" and inputs[1].dtype == "int16" and out_type.dtype == "int32" and k <= 3072 and n <= 1024 and m == 14:
         if debug:
             print("dense strategy: xilinx ", " m, k", m, k, " n, k", n, k)
         strategy.add_implementation(
@@ -335,9 +336,9 @@ def dense_strategy_cpu(attrs, inputs, out_type, target):
             name="dense_nopack.xiiln_fpga",
             plevel=11,
         )
-    # else:
-    #     if debug:
-    #         print("dense strategy: default ", " m, k", m, k, " n, k", n, k)
+    else:
+        if debug:
+            print("dense strategy: default ", " m, k", m, k, " n, k", n, k)
 
 
     if "cblas" in target.libs:
