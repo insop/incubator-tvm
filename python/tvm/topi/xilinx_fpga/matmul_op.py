@@ -41,12 +41,19 @@ import time
 @tvm.register_func("tvm.contrib.xilinx_matmul_pynq")
 def xilinx_matmul_pynq(a, b, c):
 
+    skip_everything = False
+    debug = False
     pynq = True
     if pynq:
         import os
         import pynq
         from pynq import allocate
 
+    # import pdb;pdb.set_trace()
+    Nbanks=8
+    Nmat=3
+    Tsize=1024
+    Nvec=14
 
     # use call_cnt for lazy initialization
     if not hasattr(xilinx_matmul_pynq, 'call_cnt') and not hasattr(xilinx_matmul_pynq, 'ol'):
@@ -61,47 +68,52 @@ def xilinx_matmul_pynq(a, b, c):
         XCLBIN_FILE = "/data/Projects/transformer_simple/src/python/From_Ties/krnl_matmulbertl_int16.xclbin"
         xilinx_matmul_pynq.ol=pynq.Overlay(XCLBIN_FILE)
 
-    start = time.time()
-    # import pdb;pdb.set_trace()
+        # one type
+        xilinx_matmul_pynq.source_v = pynq.allocate(shape=(Nvec,Tsize), dtype=np.int16, target=xilinx_matmul_pynq.ol.HBM14)
+        xilinx_matmul_pynq.source_w = [
+            pynq.allocate(shape=(Nmat*Tsize,Tsize//Nbanks), dtype=np.int16, target=xilinx_matmul_pynq.ol.HBM0),
+            pynq.allocate(shape=(Nmat*Tsize,Tsize//Nbanks), dtype=np.int16, target=xilinx_matmul_pynq.ol.HBM4),
+            pynq.allocate(shape=(Nmat*Tsize,Tsize//Nbanks), dtype=np.int16, target=xilinx_matmul_pynq.ol.HBM8),
+            pynq.allocate(shape=(Nmat*Tsize,Tsize//Nbanks), dtype=np.int16, target=xilinx_matmul_pynq.ol.HBM12),
+            pynq.allocate(shape=(Nmat*Tsize,Tsize//Nbanks), dtype=np.int16, target=xilinx_matmul_pynq.ol.HBM16),
+            pynq.allocate(shape=(Nmat*Tsize,Tsize//Nbanks), dtype=np.int16, target=xilinx_matmul_pynq.ol.HBM20),
+            pynq.allocate(shape=(Nmat*Tsize,Tsize//Nbanks), dtype=np.int16, target=xilinx_matmul_pynq.ol.HBM24),
+            pynq.allocate(shape=(Nmat*Tsize,Tsize//Nbanks), dtype=np.int16, target=xilinx_matmul_pynq.ol.HBM26)]
+        xilinx_matmul_pynq.outbuf = pynq.allocate((Tsize*Nmat,Nvec), dtype=np.int32, target=xilinx_matmul_pynq.ol.HBM14)
 
-    print("xilinx matmul: %s, %s, %s" % (type(a), type(b), type(c)))
-    print("xilinx matmul: %s, %s, %s" % (a.dtype, b.dtype, c.dtype))
-    print("Call count", xilinx_matmul_pynq.call_cnt)
+    if debug:
+        start = time.time()
 
-    # import pdb;pdb.set_trace()
+    if debug:
+        # print("xilinx matmul: %s, %s, %s" % (type(a), type(b), type(c)))
+        # print("xilinx matmul: %s, %s, %s" % (a.dtype, b.dtype, c.dtype))
+        print("Call count", xilinx_matmul_pynq.call_cnt)
 
-    # (m, k) = a.asnumpy().shape
-    # (k, n) = b.asnumpy().shape
     m, k = get_const_tuple(a.shape)
     n, k = get_const_tuple(b.shape)
-    #import pdb;pdb.set_trace()
-    print("xilinx matmul: a shape", m, k)
-    print("xilinx matmul: b shape", k, n)
-    # cm, cn = c.asnumpy().shape
     cm, cn = get_const_tuple(c.shape)
-    print("xilinx matmul: > c shape", cm, cn)
+
+    if debug:
+        print("xilinx matmul: a shape", m, k, "bshape", k, n)
+        # print("xilinx matmul: b shape", k, n)
+        # print("xilinx matmul: > c shape", cm, cn)
+
     # assert (m, n) == (cm, cn)
     if (m, n) != (cm, cn):
         print("xilinx matmul: c shape differs", (cm, cn), (m, n))
         # import pdb;pdb.set_trace()
-    print("xilinx matmul: >> c shape", m, n)
-
-    # import pdb;pdb.set_trace()
-    Nbanks=8
-    Nmat=3
-    Tsize=1024
-    Nvec=14
 
     k_pad = (Tsize - k) if (Tsize - k) > 0 else 0
     m_pad = (Nvec - m) if (Nvec - m) > 0 else 0
-    print("m_pad, k_pad", m_pad, k_pad)
     v = np.pad(a.asnumpy(), [(0,m_pad), (0, k_pad)], mode='constant')
 
     # b: w, pad
     n_pad = (Nmat*Tsize)-n if (Nmat*Tsize)-n > 0 else 0
-    print("n_pad", n_pad)
     w = np.pad(b.asnumpy(), [(0,n_pad),(0, k_pad)], mode='constant')
 
+    if debug:
+        print("n_pad", n_pad)
+        print("m_pad, k_pad", m_pad, k_pad)
 
     if not pynq or n > (Nmat*Tsize) or k > Tsize:
         # a: v, pad
@@ -110,26 +122,49 @@ def xilinx_matmul_pynq(a, b, c):
         outbuf1 = outbuf[:,:cn]
         tvm.nd.array(outbuf1.astype(c.dtype)).copyto(c)
 
-        # c_np = np.matmul(a.asnumpy(), b.asnumpy())
-        # print(c_np.shape)
-        # import pdb;pdb.set_trace()
-
         # tvm.nd.array(np.matmul(a.asnumpy(), b.asnumpy().T).astype(c.dtype)).copyto(c)
 
         cm, cn = get_const_tuple(c.shape)
 
-        print("numpy >>> xilinx matmul: >>> c shape", cm, cn)
-    else:
-        # TODO add pynq calls
-        print("test")
+        # TO CHECK NON PYNQ
+        if debug or pynq:
+            print("numpy >>> xilinx matmul: >>> c shape", cm, cn)
+    elif skip_everything:
 
+        # copy out c only 200 msec (cpu only base 140 msec)
+        c = tvm.nd.array(np.zeros((cm, cn), dtype=c.dtype))
+        #
+        # only push input
+
+        # xilinx_matmul_pynq.source_v.sync_to_device()
+        # for i in range(Nbanks):
+        #     xilinx_matmul_pynq.source_w[i].sync_to_device()
+        # call the kernel to do matmul
+        xilinx_matmul_pynq.ol.feeder_1.call(
+            xilinx_matmul_pynq.source_v,
+            xilinx_matmul_pynq.source_w[0],
+            xilinx_matmul_pynq.source_w[1],
+            xilinx_matmul_pynq.source_w[2],
+            xilinx_matmul_pynq.source_w[3],
+            xilinx_matmul_pynq.source_w[4],
+            xilinx_matmul_pynq.source_w[5],
+            xilinx_matmul_pynq.source_w[6],
+            xilinx_matmul_pynq.source_w[7],
+            xilinx_matmul_pynq.outbuf, 0)
+
+        # move the data back
+        xilinx_matmul_pynq.outbuf.sync_from_device()
+
+    else:
         # data prep
         source_w_split_np = []
         for i in range(Nbanks):
             source_w_split_np.append(np.zeros((Nmat*Tsize,Tsize//Nbanks)))
         # a : w
         source_w_split_np = np.hsplit(w, Nbanks)
-        print('w.shape', source_w_split_np[0].shape)
+
+        if debug:
+            print('w.shape', source_w_split_np[0].shape)
 
         # allocation buffer on the pynq
 
@@ -155,13 +190,14 @@ def xilinx_matmul_pynq(a, b, c):
 
         # output
         outbuf = pynq.allocate((Tsize*Nmat,Nvec), dtype=np.int32, target=xilinx_matmul_pynq.ol.HBM14)
-        print('outbuf.shape', outbuf.shape)
 
+        if debug:
+            print('outbuf.shape', outbuf.shape)
 
         # move the data to allocated buf
 
         source_v.sync_to_device()
-        for i in range(8):
+        for i in range(Nbanks):
             source_w[i].sync_to_device()
 
         # call the kernel to do matmul
@@ -180,40 +216,46 @@ def xilinx_matmul_pynq(a, b, c):
         # move the data back
         outbuf.sync_from_device()
 
-        print("------ pynq inputs -------")
-        print("w", source_w[0], source_w[0].shape)
-        print("v", source_v, source_v.shape)
-        print("------ pynq outputbuf -------")
+        if debug:
+            print("------ pynq inputs -------")
+            print("w", source_w[0], source_w[0].shape)
+            print("v", source_v, source_v.shape)
+            print("------ pynq outputbuf -------")
 
         outbuf1 = outbuf.T
         outbuf2 = outbuf1[:cm,:cn]
         tvm.nd.array(outbuf2.astype(c.dtype)).copyto(c)
 
-        print(outbuf2, outbuf2.dtype, outbuf2.shape)
+        if debug:
+            print(outbuf2, outbuf2.dtype, outbuf2.shape)
+            print(c, c.dtype, c.shape)
 
-        print(c, c.dtype, c.shape)
-        print("------ pynq done ------------")
-    end = time.time()
-    print(end - start)
+            print("------ pynq done ------------")
+    if debug:
+        end = time.time()
+        print(end - start)
 
 
 @autotvm.register_topi_compute("dense_nopack.xilinx_fpga")
 def dense_nopack(cfg, data, weight, bias=None, out_dtype=None):
     """Compute dense without packing"""
-    print("bias", bias)
-    print("data_dtype", data.dtype)
-    print("weight_dtype", weight.dtype)
-    print("out_dtype", out_dtype)
+
+    debug = True
+    if debug:
+        print("bias", bias)
+        print("data_dtype", data.dtype)
+        print("weight_dtype", weight.dtype)
+        print("out_dtype", out_dtype)
 
     if out_dtype is None:
         out_dtype = data.dtype
 
-
     M, K = get_const_tuple(data.shape)
     N, _ = get_const_tuple(weight.shape)
-    print("data", M, K)
-    print("weight", N, _)
-    print("bias", bias)
+    if debug:
+        print("data", M, K)
+        print("weight", N, _)
+        print("bias", bias)
 
     # create tuning space
     # cfg.define_split("tile_y", 32 if isinstance(M, tvm.tir.Var) else M, num_outputs=2)

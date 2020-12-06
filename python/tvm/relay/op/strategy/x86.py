@@ -309,12 +309,11 @@ def dense_strategy_cpu(attrs, inputs, out_type, target):
     """dense x86 strategy"""
     # import pdb;pdb.set_trace()
 
+    debug = True
+
     strategy = _op.OpStrategy()
     m, k = inputs[0].shape
     n, k = inputs[1].shape
-    print("dense strategy")
-    print("m, k", m, k)
-    print("n, k", n, k)
     same_type = inputs[0].dtype == inputs[1].dtype == out_type.dtype
     dtype = inputs[0].dtype
     u8s8s32 = dtype == "uint8" and inputs[1].dtype == "int8" and out_type.dtype == "int32"
@@ -326,17 +325,20 @@ def dense_strategy_cpu(attrs, inputs, out_type, target):
         plevel=10,
     )
 
-    if False:
-        print("SKIP ISS use extern dense")
-    else:
-        with SpecializedCondition(dtype == "int16" and inputs[1].dtype == "int16" and out_type.dtype == "int32" and k <= 3072 and n <= 1024):
-            print("ISS use extern dense")
-            strategy.add_implementation(
-                wrap_compute_dense(topi.xilinx_fpga.dense_nopack),
-                wrap_topi_schedule(topi.generic.schedule_extern),
-                name="dense_nopack.xiiln_fpga",
-                plevel=11,
-            )
+    with SpecializedCondition(dtype == "int16" and inputs[1].dtype == "int16" and out_type.dtype == "int32" and k <= 3072 and n <= 1024):
+    # if dtype == "int16" and inputs[1].dtype == "int16" and out_type.dtype == "int32" and k <= 3072 and n <= 1024:
+        if debug:
+            print("dense strategy: xilinx ", " m, k", m, k, " n, k", n, k)
+        strategy.add_implementation(
+            wrap_compute_dense(topi.xilinx_fpga.dense_nopack),
+            wrap_topi_schedule(topi.generic.schedule_extern),
+            name="dense_nopack.xiiln_fpga",
+            plevel=11,
+        )
+    # else:
+    #     if debug:
+    #         print("dense strategy: default ", " m, k", m, k, " n, k", n, k)
+
 
     if "cblas" in target.libs:
         with SpecializedCondition(same_type and dtype in ["float32", "float64"]):
