@@ -41,7 +41,7 @@ import time
 @tvm.register_func("tvm.contrib.xilinx_matmul_pynq")
 def xilinx_matmul_pynq(a, b, c):
 
-    skip_everything = False
+    skip_alloc = True
     debug = False
     do_padding = False
     pynq = True
@@ -66,7 +66,7 @@ def xilinx_matmul_pynq(a, b, c):
     # lazy initialization, such as xclbin loading for fpga
     if xilinx_matmul_pynq.call_cnt == 1 and pynq:
         print("xclbin load")
-        XCLBIN_FILE = "/data/Projects/transformer_simple/src/python/From_Ties/krnl_matmulbertl_int16.xclbin"
+        XCLBIN_FILE = "/data/Projects/transformer_simple/src/python/From_Ties/krnl_matmulbertl_opt.xclbin"
         xilinx_matmul_pynq.ol=pynq.Overlay(XCLBIN_FILE)
 
         # one type
@@ -81,6 +81,11 @@ def xilinx_matmul_pynq(a, b, c):
             pynq.allocate(shape=(Nmat*Tsize,Tsize//Nbanks), dtype=np.int16, target=xilinx_matmul_pynq.ol.HBM24),
             pynq.allocate(shape=(Nmat*Tsize,Tsize//Nbanks), dtype=np.int16, target=xilinx_matmul_pynq.ol.HBM26)]
         xilinx_matmul_pynq.outbuf = pynq.allocate((Tsize*Nmat,Nvec), dtype=np.int32, target=xilinx_matmul_pynq.ol.HBM14)
+        if skip_alloc:
+            cm = 14
+            cn = Nmat*Tsize
+            xilinx_matmul_pynq.c = tvm.nd.array(np.zeros((cm, cn), dtype=c.dtype))
+
 
     if debug:
         start = time.time()
@@ -134,16 +139,17 @@ def xilinx_matmul_pynq(a, b, c):
         # TO CHECK NON PYNQ
         if debug or pynq:
             print("numpy >>> xilinx matmul: >>> c shape", cm, cn)
-    elif skip_everything:
+    elif skip_alloc:
+        # input
+        xilinx_matmul_pynq.source_v[:] = v
 
-        # copy out c only 200 msec (cpu only base 140 msec)
-        c = tvm.nd.array(np.zeros((cm, cn), dtype=c.dtype))
         #
         # only push input
 
         # xilinx_matmul_pynq.source_v.sync_to_device()
         # for i in range(Nbanks):
         #     xilinx_matmul_pynq.source_w[i].sync_to_device()
+
         # call the kernel to do matmul
         xilinx_matmul_pynq.ol.feeder_1.call(
             xilinx_matmul_pynq.source_v,
@@ -155,10 +161,18 @@ def xilinx_matmul_pynq(a, b, c):
             xilinx_matmul_pynq.source_w[5],
             xilinx_matmul_pynq.source_w[6],
             xilinx_matmul_pynq.source_w[7],
-            xilinx_matmul_pynq.outbuf, 0)
+            xilinx_matmul_pynq.outbuf,
+            Nmat,
+            Nvec,
+            0)
 
         # move the data back
         xilinx_matmul_pynq.outbuf.sync_from_device()
+
+        # dummy output without reshaping outbuf to c
+        # copy out c only 200 msec (cpu only base 140 msec)
+        # c = tvm.nd.array(np.zeros((cm, cn), dtype=c.dtype))
+        c = xilinx_matmul_pynq.c
 
     else:
         # data prep
@@ -216,7 +230,10 @@ def xilinx_matmul_pynq(a, b, c):
             source_w[5],
             source_w[6],
             source_w[7],
-            outbuf, 0)
+            outbuf,
+            Nmat,
+            Nvec,
+            0)
 
         # move the data back
         outbuf.sync_from_device()

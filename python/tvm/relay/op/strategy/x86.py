@@ -310,7 +310,7 @@ def dense_strategy_cpu(attrs, inputs, out_type, target):
     # import pdb;pdb.set_trace()
 
     debug = True
-    use_pynq = False
+    use_pynq = True
 
     strategy = _op.OpStrategy()
     m, k = inputs[0].shape
