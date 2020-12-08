@@ -41,7 +41,7 @@ import time
 @tvm.register_func("tvm.contrib.xilinx_matmul_pynq")
 def xilinx_matmul_pynq(a, b, c):
 
-    skip_alloc = True
+    skip_alloc = False
     debug = False
     do_padding = False
     pynq = True
@@ -81,6 +81,12 @@ def xilinx_matmul_pynq(a, b, c):
             pynq.allocate(shape=(Nmat*Tsize,Tsize//Nbanks), dtype=np.int16, target=xilinx_matmul_pynq.ol.HBM24),
             pynq.allocate(shape=(Nmat*Tsize,Tsize//Nbanks), dtype=np.int16, target=xilinx_matmul_pynq.ol.HBM26)]
         xilinx_matmul_pynq.outbuf = pynq.allocate((Tsize*Nmat,Nvec), dtype=np.int32, target=xilinx_matmul_pynq.ol.HBM14)
+
+        # data prep
+        xilinx_matmul_pynq.source_w_split_np = []
+        for i in range(Nbanks):
+            xilinx_matmul_pynq.source_w_split_np.append(np.zeros((Nmat*Tsize,Tsize//Nbanks)))
+
         if skip_alloc:
             cm = 14
             cn = Nmat*Tsize
@@ -175,68 +181,44 @@ def xilinx_matmul_pynq(a, b, c):
         c = xilinx_matmul_pynq.c
 
     else:
-        # data prep
-        source_w_split_np = []
-        for i in range(Nbanks):
-            source_w_split_np.append(np.zeros((Nmat*Tsize,Tsize//Nbanks)))
         # b : w
-        source_w_split_np = np.hsplit(w, Nbanks)
+        xilinx_matmul_pynq.source_w_split_np = np.hsplit(w, Nbanks)
 
         if debug:
-            print('w.shape', source_w_split_np[0].shape)
+            print('w.shape', xilinx_matmul_pynq.source_w_split_np[0].shape)
 
-        # allocation buffer on the pynq
-
-        # vector
-        source_v = pynq.allocate(shape=(Nvec,Tsize), dtype=np.int16, target=xilinx_matmul_pynq.ol.HBM14)
         # a : v
-        source_v[:] = v
+        xilinx_matmul_pynq.source_v[:] = v
 
-        # W
-        source_w = [
-            pynq.allocate(shape=(Nmat*Tsize,Tsize//Nbanks), dtype=np.int16, target=xilinx_matmul_pynq.ol.HBM0),
-            pynq.allocate(shape=(Nmat*Tsize,Tsize//Nbanks), dtype=np.int16, target=xilinx_matmul_pynq.ol.HBM4),
-            pynq.allocate(shape=(Nmat*Tsize,Tsize//Nbanks), dtype=np.int16, target=xilinx_matmul_pynq.ol.HBM8),
-            pynq.allocate(shape=(Nmat*Tsize,Tsize//Nbanks), dtype=np.int16, target=xilinx_matmul_pynq.ol.HBM12),
-            pynq.allocate(shape=(Nmat*Tsize,Tsize//Nbanks), dtype=np.int16, target=xilinx_matmul_pynq.ol.HBM16),
-            pynq.allocate(shape=(Nmat*Tsize,Tsize//Nbanks), dtype=np.int16, target=xilinx_matmul_pynq.ol.HBM20),
-            pynq.allocate(shape=(Nmat*Tsize,Tsize//Nbanks), dtype=np.int16, target=xilinx_matmul_pynq.ol.HBM24),
-            pynq.allocate(shape=(Nmat*Tsize,Tsize//Nbanks), dtype=np.int16, target=xilinx_matmul_pynq.ol.HBM26)]
-
-        for i in range(len(source_w)):
-            #     source_w[i][:] = np.random.randint(-2^15, high=2^15-1, dtype=np.int16, size=(Nmat*Tsize//Nbanks,Tsize))
-            source_w[i][:] = source_w_split_np[i]
-
-        # output
-        outbuf = pynq.allocate((Tsize*Nmat,Nvec), dtype=np.int32, target=xilinx_matmul_pynq.ol.HBM14)
+        for i in range(Nbanks):
+            xilinx_matmul_pynq.source_w[i][:] = xilinx_matmul_pynq.source_w_split_np[i]
 
         if debug:
-            print('outbuf.shape', outbuf.shape)
+            print('outbuf.shape', xilinx_matmul_pynq.outbuf.shape)
 
         # move the data to allocated buf
-
-        source_v.sync_to_device()
+        xilinx_matmul_pynq.source_v.sync_to_device()
         for i in range(Nbanks):
-            source_w[i].sync_to_device()
+            xilinx_matmul_pynq.source_w[i].sync_to_device()
 
         # call the kernel to do matmul
         xilinx_matmul_pynq.ol.feeder_1.call(
-            source_v,
-            source_w[0],
-            source_w[1],
-            source_w[2],
-            source_w[3],
-            source_w[4],
-            source_w[5],
-            source_w[6],
-            source_w[7],
-            outbuf,
+            xilinx_matmul_pynq.source_v,
+            xilinx_matmul_pynq.source_w[0],
+            xilinx_matmul_pynq.source_w[1],
+            xilinx_matmul_pynq.source_w[2],
+            xilinx_matmul_pynq.source_w[3],
+            xilinx_matmul_pynq.source_w[4],
+            xilinx_matmul_pynq.source_w[5],
+            xilinx_matmul_pynq.source_w[6],
+            xilinx_matmul_pynq.source_w[7],
+            xilinx_matmul_pynq.outbuf,
             Nmat,
             Nvec,
             0)
 
         # move the data back
-        outbuf.sync_from_device()
+        xilinx_matmul_pynq.outbuf.sync_from_device()
 
         if debug:
             print("------ pynq inputs -------")
@@ -244,7 +226,7 @@ def xilinx_matmul_pynq(a, b, c):
             print("v", source_v, source_v.shape)
             print("------ pynq outputbuf -------")
 
-        outbuf1 = outbuf.T
+        outbuf1 = xilinx_matmul_pynq.outbuf.T
         if do_padding:
             outbuf2 = outbuf1[:cm,:cn]
         else:
